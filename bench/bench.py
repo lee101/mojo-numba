@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import platform
+import subprocess
 import sys
 import time
 
@@ -83,6 +84,22 @@ def machine():
     return model or platform.machine()
 
 
+def gpu_free_mib():
+    try:
+        output = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.free",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+            timeout=5,
+        )
+        return max(int(line.strip()) for line in output.splitlines() if line.strip())
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0
+
+
 def main():
     rng = np.random.default_rng(42)
     x = np.ascontiguousarray(rng.normal(size=1_000_000))
@@ -119,6 +136,37 @@ def main():
             f"{milliseconds(python_time)} | {numba_time / mojo_time:.2f}x | "
             f"{python_time / mojo_time:.2f}x |"
         )
+
+    free_mib = gpu_free_mib()
+    if free_mib < 4000:
+        print(f"\nGPU benchmark skipped: {free_mib} MiB free (requires 4000 MiB).")
+        return
+    from mojo_numba import _gpu
+
+    if not _gpu.available():
+        print("\nGPU benchmark skipped: no usable GPU runtime.")
+        return
+    size = 384
+    ga = np.ascontiguousarray(rng.normal(size=(size, size)))
+    gb = np.ascontiguousarray(rng.normal(size=(size, size)))
+    mojo_cpu = mnb.njit(matmul_square)
+    mojo_gpu = mnb.njit(matmul_square, device="gpu")
+    upstream = numba.njit(matmul_square)
+    cpu_result = mojo_cpu(ga, gb)
+    gpu_result = mojo_gpu(ga, gb)
+    upstream(ga, gb)
+    if not np.allclose(gpu_result, cpu_result, rtol=1e-12, atol=1e-12):
+        raise RuntimeError("GPU matmul parity failed")
+    cpu_time = best_time(lambda: mojo_cpu(ga, gb))
+    gpu_time = best_time(lambda: mojo_gpu(ga, gb))
+    upstream_time = best_time(lambda: upstream(ga, gb))
+    print("\n| GPU kernel | mojo-numba GPU | mojo-numba CPU | upstream Numba | vs CPU |")
+    print("| --- | ---: | ---: | ---: | ---: |")
+    print(
+        f"| naive matmul, {size}x{size} | {milliseconds(gpu_time)} | "
+        f"{milliseconds(cpu_time)} | {milliseconds(upstream_time)} | "
+        f"{cpu_time / gpu_time:.2f}x |"
+    )
 
 
 if __name__ == "__main__":

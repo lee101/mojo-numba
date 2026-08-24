@@ -204,6 +204,28 @@ def test_parallel_nonlinear_threshold():
     assert_compiled_parity(nonlinear_impl, x)
 
 
+def test_large_parallel_axpy_chunks_and_tail():
+    from mojo_numba._lib import addr, lib
+
+    size = 16_777_219
+    x = np.linspace(-2.0, 2.0, size)
+    y = np.linspace(1.0, -1.0, size)
+    result = np.full(size, np.nan)
+    lib().mn_axpy_f64(addr(x), addr(y), addr(result), size, 0.75)
+    assert not np.isnan(result).any()
+    indexes = np.array([0, size // 8 - 1, size // 8, size // 2, size - 2, size - 1])
+    assert np.allclose(result[indexes], 0.75 * x[indexes] + y[indexes])
+
+
+def test_large_parallel_threshold_chunks_and_tail():
+    from mojo_numba._lib import addr, lib
+
+    size = 33_554_435
+    x = np.linspace(-2.0, 2.0, size)
+    actual = lib().mn_threshold_count_f64(addr(x), size, 0.2)
+    assert actual == np.count_nonzero(x > 0.2)
+
+
 def test_nested_matrix_loop_parity():
     rng = np.random.default_rng(1)
     a = np.ascontiguousarray(rng.normal(size=(12, 12)))
@@ -219,6 +241,32 @@ def test_parallel_matmul_threshold():
     plan = next(iter(compiled._plans.values()))
     assert plan.fast_path is not None
     assert plan.fast_path.kind == "matmul_square"
+
+
+def test_gpu_matmul_parity_or_cpu_fallback(monkeypatch):
+    from mojo_numba import _gpu
+
+    rng = np.random.default_rng(19)
+    a = np.ascontiguousarray(rng.normal(size=(33, 33)))
+    b = np.ascontiguousarray(rng.normal(size=(33, 33)))
+    monkeypatch.setattr(_gpu, "MIN_MATMUL_N", 0)
+    cpu = mnb.njit(matmul_square_impl)(a, b)
+    gpu = mnb.njit(matmul_square_impl, device="gpu")(a, b)
+    assert np.allclose(gpu, cpu, rtol=1e-12, atol=1e-12)
+
+
+def test_invalid_device_rejected():
+    with pytest.raises(ValueError, match="device"):
+        mnb.njit(matmul_square_impl, device="tpu")
+
+
+def test_gpu_allocation_cap_falls_back(monkeypatch):
+    from mojo_numba import _gpu
+
+    monkeypatch.setattr(_gpu, "MIN_MATMUL_N", 0)
+    monkeypatch.setattr(_gpu, "MAX_MATMUL_N", 2)
+    a = np.eye(3)
+    assert not _gpu.matmul(a, a, np.empty_like(a))
 
 
 def test_2d_indexing_math_and_branch_parity():

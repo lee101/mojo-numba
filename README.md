@@ -102,11 +102,24 @@ CPython column is one call. Compilation is excluded for both compiled systems.
 
 | kernel | mojo-numba | upstream Numba | CPython | against upstream | over CPython |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| sum of squares, 1M | 0.52 ms | 1.10 ms | 327.50 ms | 2.12x | 630.13x |
-| AXPY allocation, 1M | 2.42 ms | 2.45 ms | 534.56 ms | 1.01x | 221.23x |
-| threshold count, 1M | 0.29 ms | 0.26 ms | 223.19 ms | 0.90x | 763.10x |
-| sin + exp transform, 1M | 23.31 ms | 26.56 ms | 606.58 ms | 1.14x | 26.02x |
-| naive matmul, 80x80 | 0.28 ms | 0.46 ms | 401.88 ms | 1.63x | 1433.00x |
+| sum of squares, 1M | 0.44 ms | 0.95 ms | 314.74 ms | 2.17x | 719.60x |
+| AXPY allocation, 1M | 0.93 ms | 0.86 ms | 412.69 ms | 0.93x | 445.14x |
+| threshold count, 1M | 0.25 ms | 0.25 ms | 180.34 ms | 1.03x | 732.09x |
+| sin + exp transform, 1M | 17.18 ms | 23.04 ms | 385.59 ms | 1.34x | 22.44x |
+| naive matmul, 80x80 | 0.21 ms | 0.41 ms | 322.23 ms | 1.94x | 1537.17x |
+
+The square-matrix kernel has an explicit optional GPU backend. The same locked run,
+with 13,465 MiB initially free on an RTX 5090, measured:
+
+| GPU kernel | mojo-numba GPU | mojo-numba CPU | upstream Numba | against CPU |
+| --- | ---: | ---: | ---: | ---: |
+| naive matmul, 384x384 | 2.16 ms | 33.17 ms | 133.07 ms | 15.32x |
+
+Select it with `njit(device="gpu")`. CPU remains the default. Matrices below 256
+stay on CPU because transfer and launch overhead dominate. A missing runtime, less
+than 4,000 MiB of free device memory, allocation failure, or matrices above 8,192
+silently fall back to CPU. The upper bound keeps the three device buffers below
+2 GiB in total, and buffers are released at the end of each call.
 
 Ratios are upstream or CPython time divided by mojo-numba time, so values above one
 favor mojo-numba. These are single-machine microbenchmarks, not general performance
@@ -114,6 +127,9 @@ claims. Canonical reductions, elementwise transforms, counts, and
 square matrix multiplication are recognized once during lowering and dispatched to
 prebuilt native SIMD kernels. Other supported programs continue to use the compact
 typed VM, preserving the bounded language subset without per-function Mojo builds.
+Large AXPY transforms (at least 16,777,216 elements) and threshold counts (at least
+33,554,432 elements) use eight or fewer native workers; smaller inputs stay serial
+to avoid the measured thread-launch cost.
 
 ## How it works
 

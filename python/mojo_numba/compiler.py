@@ -14,6 +14,7 @@ from typing import Any, Callable
 import numpy as np
 
 from . import errors
+from . import _gpu
 from ._lib import addr, lib
 from .types import Signature, parse_signature
 
@@ -492,7 +493,7 @@ class Plan:
     mutated: set[str]
     fast_path: FastPath | None
 
-    def execute(self, arguments: dict[str, Any]):
+    def execute(self, arguments: dict[str, Any], device: str = "cpu"):
         runtime: dict[str, np.ndarray] = {}
         for entry in self.arrays:
             if entry.argument is not None:
@@ -520,7 +521,7 @@ class Plan:
             if not runtime[name].flags.writeable:
                 raise errors.TypingError(f"array {name!r} is read-only")
 
-        used_fast_path, fast_result = self._execute_fast(runtime, arguments)
+        used_fast_path, fast_result = self._execute_fast(runtime, arguments, device)
         if used_fast_path:
             return fast_result
 
@@ -571,7 +572,7 @@ class Plan:
         return None
 
     def _execute_fast(
-        self, runtime: dict[str, np.ndarray], arguments: dict[str, Any]
+        self, runtime: dict[str, np.ndarray], arguments: dict[str, Any], device: str
     ) -> tuple[bool, Any]:
         fast_path = self.fast_path
         if fast_path is None:
@@ -640,6 +641,8 @@ class Plan:
             ):
                 return False, None
             if a.size == 0:
+                return True, result
+            if device == "gpu" and _gpu.matmul(a, b, result):
                 return True, result
             native.mn_matmul_square_f64(addr(a), addr(b), addr(result), a.shape[0])
             return True, result
@@ -1241,6 +1244,9 @@ class Dispatcher:
         self.signature = inspect.signature(function)
         self.declared_signature = parse_signature(signature)
         self.options = dict(options or {})
+        self.device = self.options.get("device", "cpu")
+        if self.device not in ("cpu", "gpu"):
+            raise ValueError("device must be 'cpu' or 'gpu'")
         self._node = _function_ast(function)
         self._plans: dict[tuple, Plan] = {}
         self.signatures: list[tuple] = []
@@ -1258,7 +1264,7 @@ class Dispatcher:
             plan = Lowerer(self._node, arguments).lower()
             self._plans[key] = plan
             self.signatures.append(key)
-        return plan.execute(arguments)
+        return plan.execute(arguments, self.device)
 
     def compile(self, signature=None):
         if signature is not None:
