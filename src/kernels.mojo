@@ -1,8 +1,7 @@
 """Typed bytecode execution kernels for mojo-numba."""
 
-from std.algorithm import parallelize
 from std.math import cos, exp, floor, log, pow, sin, sqrt, tanh
-from std.sys.info import num_physical_cores, simd_width_of as simdwidthof
+from std.sys.info import simd_width_of as simdwidthof
 
 comptime F64Ptr = UnsafePointer[Float64, AnyOrigin[mut=True]]
 comptime F32Ptr = UnsafePointer[Float32, AnyOrigin[mut=True]]
@@ -42,7 +41,7 @@ def mn_axpy_f64(
     var x = F64Ptr(unsafe_from_address=x_addr)
     var y = F64Ptr(unsafe_from_address=y_addr)
     var dst = F64Ptr(unsafe_from_address=dst_addr)
-    var workers = num_physical_cores() if n >= PARALLEL_AXPY_ELEMENTS else 1
+    var workers = 1
 
     @parameter
     def process(worker: Int):
@@ -82,10 +81,7 @@ def mn_axpy_f64(
             dst[i] = alpha * x[i] + y[i]
             i += 1
 
-    if workers > 1:
-        parallelize[process](workers, workers)
-    else:
-        process(0)
+    process(0)
 
 
 @export("mn_threshold_count_f64")
@@ -119,7 +115,7 @@ def mn_threshold_count_f64(
 def mn_nonlinear_f64(x_addr: Int, dst_addr: Int, n: Int) abi("C"):
     var x = F64Ptr(unsafe_from_address=x_addr)
     var dst = F64Ptr(unsafe_from_address=dst_addr)
-    var workers = num_physical_cores() if n >= PARALLEL_ELEMENTS else 1
+    var workers = 1
 
     @parameter
     def process(worker: Int):
@@ -135,10 +131,7 @@ def mn_nonlinear_f64(x_addr: Int, dst_addr: Int, n: Int) abi("C"):
             dst[i] = sin(value) + exp(-abs(value))
             i += 1
 
-    if workers > 1:
-        parallelize[process](workers, workers)
-    else:
-        process(0)
+    process(0)
 
 
 @export("mn_matmul_square_f64")
@@ -148,9 +141,7 @@ def mn_matmul_square_f64(
     var a = F64Ptr(unsafe_from_address=a_addr)
     var b = F64Ptr(unsafe_from_address=b_addr)
     var dst = F64Ptr(unsafe_from_address=dst_addr)
-    var work = n * n * n
-    var workers = num_physical_cores() if work >= PARALLEL_MATMUL_WORK else 1
-    workers = min(workers, n)
+    var workers = 1
 
     @parameter
     def process(worker: Int):
@@ -175,10 +166,7 @@ def mn_matmul_square_f64(
                 target[col] = total
                 col += 1
 
-    if workers > 1:
-        parallelize[process](workers, workers)
-    else:
-        process(0)
+    process(0)
 
 
 def load_value(address: Int, dtype: Int, index: Int) -> Float64:
