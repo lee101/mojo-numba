@@ -1,9 +1,7 @@
 """Typed bytecode execution kernels for mojo-numba."""
 
-from max.algorithm import parallelize
 from std.math import cos, exp, floor, log, pow, sin, sqrt, tanh
-from std.memory import stack_allocation
-from std.sys.info import num_physical_cores, simd_width_of as simdwidthof
+from std.sys.info import simd_width_of as simdwidthof
 
 comptime F64Ptr = UnsafePointer[Float64, AnyOrigin[mut=True]]
 comptime F32Ptr = UnsafePointer[Float32, AnyOrigin[mut=True]]
@@ -11,10 +9,6 @@ comptime I64Ptr = UnsafePointer[Int64, AnyOrigin[mut=True]]
 comptime I32Ptr = UnsafePointer[Int32, AnyOrigin[mut=True]]
 comptime U8Ptr = UnsafePointer[UInt8, AnyOrigin[mut=True]]
 comptime W = simdwidthof[DType.float64]()
-comptime MAX_CPU_WORKERS = 8
-comptime PARALLEL_ELEMENTS = 33_554_432
-comptime PARALLEL_AXPY_ELEMENTS = 16_777_216
-comptime PARALLEL_MATMUL_WORK = 2_000_000
 
 
 @export("mn_sum_squares_f64")
@@ -45,53 +39,39 @@ def mn_axpy_f64(
     var y = F64Ptr(unsafe_from_address=y_addr)
     var dst = F64Ptr(unsafe_from_address=dst_addr)
     var alpha_vector = SIMD[DType.float64, W](alpha)
-    var workers = (
-        min(MAX_CPU_WORKERS, num_physical_cores())
-        if n >= PARALLEL_AXPY_ELEMENTS else 1
-    )
-
-    @parameter
-    def process(worker: Int):
-        var start = worker * n // workers
-        var end = (worker + 1) * n // workers
-        var i = start
-        while i + 4 * W <= end:
-            dst.store(
-                i,
-                alpha_vector * x.load[width=W](i)
-                + y.load[width=W](i),
-            )
-            dst.store(
-                i + W,
-                alpha_vector * x.load[width=W](i + W)
-                + y.load[width=W](i + W),
-            )
-            dst.store(
-                i + 2 * W,
-                alpha_vector * x.load[width=W](i + 2 * W)
-                + y.load[width=W](i + 2 * W),
-            )
-            dst.store(
-                i + 3 * W,
-                alpha_vector * x.load[width=W](i + 3 * W)
-                + y.load[width=W](i + 3 * W),
-            )
-            i += 4 * W
-        while i + W <= end:
-            dst.store(
-                i,
-                alpha_vector * x.load[width=W](i)
-                + y.load[width=W](i),
-            )
-            i += W
-        while i < end:
-            dst[i] = alpha * x[i] + y[i]
-            i += 1
-
-    if workers > 1:
-        parallelize[process](workers, workers)
-    else:
-        process(0)
+    var i = 0
+    while i + 4 * W <= n:
+        dst.store(
+            i,
+            alpha_vector * x.load[width=W](i)
+            + y.load[width=W](i),
+        )
+        dst.store(
+            i + W,
+            alpha_vector * x.load[width=W](i + W)
+            + y.load[width=W](i + W),
+        )
+        dst.store(
+            i + 2 * W,
+            alpha_vector * x.load[width=W](i + 2 * W)
+            + y.load[width=W](i + 2 * W),
+        )
+        dst.store(
+            i + 3 * W,
+            alpha_vector * x.load[width=W](i + 3 * W)
+            + y.load[width=W](i + 3 * W),
+        )
+        i += 4 * W
+    while i + W <= n:
+        dst.store(
+            i,
+            alpha_vector * x.load[width=W](i)
+            + y.load[width=W](i),
+        )
+        i += W
+    while i < n:
+        dst[i] = alpha * x[i] + y[i]
+        i += 1
 
 
 @export("mn_threshold_count_f64")
@@ -99,120 +79,69 @@ def mn_threshold_count_f64(
     x_addr: Int, n: Int, limit: Float64
 ) abi("C") -> Int64:
     var x = F64Ptr(unsafe_from_address=x_addr)
-    if n < PARALLEL_ELEMENTS:
-        var total0 = SIMD[DType.int64, W](0)
-        var total1 = SIMD[DType.int64, W](0)
-        var total2 = SIMD[DType.int64, W](0)
-        var total3 = SIMD[DType.int64, W](0)
-        var i = 0
-        while i + 4 * W <= n:
-            total0 += x.load[width=W](i).gt(limit).cast[DType.int64]()
-            total1 += x.load[width=W](i + W).gt(limit).cast[DType.int64]()
-            total2 += x.load[width=W](i + 2 * W).gt(limit).cast[DType.int64]()
-            total3 += x.load[width=W](i + 3 * W).gt(limit).cast[DType.int64]()
-            i += 4 * W
-        while i + W <= n:
-            total0 += x.load[width=W](i).gt(limit).cast[DType.int64]()
-            i += W
-        var total = (total0 + total1 + total2 + total3).reduce_add()
-        while i < n:
-            if x[i] > limit:
-                total += 1
-            i += 1
-        return total
-    var workers = (
-        min(MAX_CPU_WORKERS, num_physical_cores())
-    )
-    var partials = stack_allocation[MAX_CPU_WORKERS, Int64]()
-
-    @parameter
-    def process(worker: Int):
-        var start = worker * n // workers
-        var end = (worker + 1) * n // workers
-        var total0 = SIMD[DType.int64, W](0)
-        var total1 = SIMD[DType.int64, W](0)
-        var total2 = SIMD[DType.int64, W](0)
-        var total3 = SIMD[DType.int64, W](0)
-        var i = start
-        while i + 4 * W <= end:
-            total0 += x.load[width=W](i).gt(limit).cast[DType.int64]()
-            total1 += x.load[width=W](i + W).gt(limit).cast[DType.int64]()
-            total2 += x.load[width=W](i + 2 * W).gt(limit).cast[DType.int64]()
-            total3 += x.load[width=W](i + 3 * W).gt(limit).cast[DType.int64]()
-            i += 4 * W
-        while i + W <= end:
-            total0 += x.load[width=W](i).gt(limit).cast[DType.int64]()
-            i += W
-        var subtotal = (total0 + total1 + total2 + total3).reduce_add()
-        while i < end:
-            if x[i] > limit:
-                subtotal += 1
-            i += 1
-        partials[worker] = subtotal
-
-    parallelize[process](workers, workers)
-    var total = Int64(0)
-    for worker in range(workers):
-        total += partials[worker]
+    var total0 = SIMD[DType.int64, W](0)
+    var total1 = SIMD[DType.int64, W](0)
+    var total2 = SIMD[DType.int64, W](0)
+    var total3 = SIMD[DType.int64, W](0)
+    var i = 0
+    while i + 4 * W <= n:
+        total0 += x.load[width=W](i).gt(limit).cast[DType.int64]()
+        total1 += x.load[width=W](i + W).gt(limit).cast[DType.int64]()
+        total2 += x.load[width=W](i + 2 * W).gt(limit).cast[DType.int64]()
+        total3 += x.load[width=W](i + 3 * W).gt(limit).cast[DType.int64]()
+        i += 4 * W
+    while i + W <= n:
+        total0 += x.load[width=W](i).gt(limit).cast[DType.int64]()
+        i += W
+    var total = (total0 + total1 + total2 + total3).reduce_add()
+    while i < n:
+        if x[i] > limit:
+            total += 1
+        i += 1
     return total
 
 
 @export("mn_nonlinear_f64")
-def mn_nonlinear_f64(x_addr: Int, dst_addr: Int, n: Int) abi("C"):
+def mn_nonlinear_f64(x_addr: Int, dst_addr: Int, start: Int, count: Int) abi("C"):
     var x = F64Ptr(unsafe_from_address=x_addr)
     var dst = F64Ptr(unsafe_from_address=dst_addr)
-    var workers = 1
-
-    @parameter
-    def process(worker: Int):
-        var start = worker * n // workers
-        var end = (worker + 1) * n // workers
-        var i = start
-        while i + W <= end:
-            var values = x.load[width=W](i)
-            dst.store(i, sin(values) + exp(-abs(values)))
-            i += W
-        while i < end:
-            var value = x[i]
-            dst[i] = sin(value) + exp(-abs(value))
-            i += 1
-
-    process(0)
+    var end = start + count
+    var i = start
+    while i + W <= end:
+        var values = x.load[width=W](i)
+        dst.store(i, sin(values) + exp(-abs(values)))
+        i += W
+    while i < end:
+        var value = x[i]
+        dst[i] = sin(value) + exp(-abs(value))
+        i += 1
 
 
 @export("mn_matmul_square_f64")
 def mn_matmul_square_f64(
-    a_addr: Int, b_addr: Int, dst_addr: Int, n: Int
+    a_addr: Int, b_addr: Int, dst_addr: Int, n: Int, row_start: Int, row_end: Int
 ) abi("C"):
     var a = F64Ptr(unsafe_from_address=a_addr)
     var b = F64Ptr(unsafe_from_address=b_addr)
     var dst = F64Ptr(unsafe_from_address=dst_addr)
-    var workers = 1
-
-    @parameter
-    def process(worker: Int):
-        var row_start = worker * n // workers
-        var row_end = (worker + 1) * n // workers
-        for row in range(row_start, row_end):
-            var target = dst + row * n
-            var col = 0
-            while col + W <= n:
-                var acc = SIMD[DType.float64, W](0.0)
-                for k in range(n):
-                    acc += (
-                        SIMD[DType.float64, W](a[row * n + k])
-                        * b.load[width=W](k * n + col)
-                    )
-                target.store(col, acc)
-                col += W
-            while col < n:
-                var total = 0.0
-                for k in range(n):
-                    total += a[row * n + k] * b[k * n + col]
-                target[col] = total
-                col += 1
-
-    process(0)
+    for row in range(row_start, row_end):
+        var target = dst + row * n
+        var col = 0
+        while col + W <= n:
+            var acc = SIMD[DType.float64, W](0.0)
+            for k in range(n):
+                acc += (
+                    SIMD[DType.float64, W](a[row * n + k])
+                    * b.load[width=W](k * n + col)
+                )
+            target.store(col, acc)
+            col += W
+        while col < n:
+            var total = 0.0
+            for k in range(n):
+                total += a[row * n + k] * b[k * n + col]
+            target[col] = total
+            col += 1
 
 
 def load_value(address: Int, dtype: Int, index: Int) -> Float64:

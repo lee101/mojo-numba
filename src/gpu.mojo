@@ -1,6 +1,6 @@
 """Optional GPU matrix multiplication for high-intensity square kernels."""
 
-from std.gpu import block_idx, thread_idx
+from max.gpu import block_idx, thread_idx
 from max.gpu.host import DeviceContext
 
 comptime FPtr = UnsafePointer[Float64, AnyOrigin[mut=True]]

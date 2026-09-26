@@ -15,7 +15,7 @@ import numpy as np
 
 from . import errors
 from . import _gpu
-from ._lib import addr, lib
+from ._lib import addr, lib, run_chunks
 from .types import Signature, parse_signature
 
 
@@ -624,7 +624,13 @@ class Plan:
                 return False, None
             if x.size == 0:
                 return True, result
-            native.mn_nonlinear_f64(addr(x), addr(result), x.size)
+            run_chunks(
+                lambda lo, hi: native.mn_nonlinear_f64(
+                    addr(x), addr(result), lo, hi - lo
+                ),
+                x.size,
+                2 * x.size,
+            )
             return True, result
         if fast_path.kind == "matmul_square":
             a = runtime[fast_path.names[0]]
@@ -644,7 +650,14 @@ class Plan:
                 return True, result
             if device == "gpu" and _gpu.matmul(a, b, result):
                 return True, result
-            native.mn_matmul_square_f64(addr(a), addr(b), addr(result), a.shape[0])
+            n = a.shape[0]
+            run_chunks(
+                lambda lo, hi: native.mn_matmul_square_f64(
+                    addr(a), addr(b), addr(result), n, lo, hi
+                ),
+                n,
+                2 * n * n * n,
+            )
             return True, result
         return False, None
 
