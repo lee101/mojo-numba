@@ -17,7 +17,7 @@ def mn_sum_squares_f64(x_addr: Int, n: Int) abi("C") -> Float64:
     var vector_total = SIMD[DType.float64, W](0.0)
     var i = 0
     while i + W <= n:
-        var values = x.load[width=W](i)
+        var values = x.unsafe_load[width=W](i)
         vector_total += values * values
         i += W
     var total = vector_total.reduce_add()
@@ -43,30 +43,30 @@ def mn_axpy_f64(
     while i + 4 * W <= n:
         dst.store(
             i,
-            alpha_vector * x.load[width=W](i)
-            + y.load[width=W](i),
+            alpha_vector * x.unsafe_load[width=W](i)
+            + y.unsafe_load[width=W](i),
         )
         dst.store(
             i + W,
-            alpha_vector * x.load[width=W](i + W)
-            + y.load[width=W](i + W),
+            alpha_vector * x.unsafe_load[width=W](i + W)
+            + y.unsafe_load[width=W](i + W),
         )
         dst.store(
             i + 2 * W,
-            alpha_vector * x.load[width=W](i + 2 * W)
-            + y.load[width=W](i + 2 * W),
+            alpha_vector * x.unsafe_load[width=W](i + 2 * W)
+            + y.unsafe_load[width=W](i + 2 * W),
         )
         dst.store(
             i + 3 * W,
-            alpha_vector * x.load[width=W](i + 3 * W)
-            + y.load[width=W](i + 3 * W),
+            alpha_vector * x.unsafe_load[width=W](i + 3 * W)
+            + y.unsafe_load[width=W](i + 3 * W),
         )
         i += 4 * W
     while i + W <= n:
         dst.store(
             i,
-            alpha_vector * x.load[width=W](i)
-            + y.load[width=W](i),
+            alpha_vector * x.unsafe_load[width=W](i)
+            + y.unsafe_load[width=W](i),
         )
         i += W
     while i < n:
@@ -85,13 +85,13 @@ def mn_threshold_count_f64(
     var total3 = SIMD[DType.int64, W](0)
     var i = 0
     while i + 4 * W <= n:
-        total0 += x.load[width=W](i).gt(limit).cast[DType.int64]()
-        total1 += x.load[width=W](i + W).gt(limit).cast[DType.int64]()
-        total2 += x.load[width=W](i + 2 * W).gt(limit).cast[DType.int64]()
-        total3 += x.load[width=W](i + 3 * W).gt(limit).cast[DType.int64]()
+        total0 += x.unsafe_load[width=W](i).gt(limit).cast[DType.int64]()
+        total1 += x.unsafe_load[width=W](i + W).gt(limit).cast[DType.int64]()
+        total2 += x.unsafe_load[width=W](i + 2 * W).gt(limit).cast[DType.int64]()
+        total3 += x.unsafe_load[width=W](i + 3 * W).gt(limit).cast[DType.int64]()
         i += 4 * W
     while i + W <= n:
-        total0 += x.load[width=W](i).gt(limit).cast[DType.int64]()
+        total0 += x.unsafe_load[width=W](i).gt(limit).cast[DType.int64]()
         i += W
     var total = (total0 + total1 + total2 + total3).reduce_add()
     while i < n:
@@ -108,7 +108,7 @@ def mn_nonlinear_f64(x_addr: Int, dst_addr: Int, start: Int, count: Int) abi("C"
     var end = start + count
     var i = start
     while i + W <= end:
-        var values = x.load[width=W](i)
+        var values = x.unsafe_load[width=W](i)
         dst.store(i, sin(values) + exp(-abs(values)))
         i += W
     while i < end:
@@ -132,7 +132,7 @@ def mn_matmul_square_f64(
             for k in range(n):
                 acc += (
                     SIMD[DType.float64, W](a[row * n + k])
-                    * b.load[width=W](k * n + col)
+                    * b.unsafe_load[width=W](k * n + col)
                 )
             target.store(col, acc)
             col += W
